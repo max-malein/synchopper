@@ -1,0 +1,29 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <Nullable>enable</Nullable>
+	<LangVersion>11.0</LangVersion>
+
+	<SynchopperVersion>0.9.0.0</SynchopperVersion>
+	<Version>$(SynchopperVersion)</Version>
+	<AssemblyVersion>$(SynchopperVersion)</AssemblyVersion>
+	<FileVersion>$(SynchopperVersion)</FileVersion>
+	<InformationalVersion>$(SynchopperVersion)</InformationalVersion>
+  </PropertyGroup>
+
+	<ItemGroup>
+		<PackageReference Include="Grasshopper" Version="7.29.23107.3001">
+			<ExcludeAssets> runtime </ExcludeAssets>
+		</PackageReference>		
+	</ItemGroup>
+
+	<ItemGroup>
+		<Reference Include="System.Windows.Forms" />
+	</ItemGroup>
+
+	<Target Name="PostBuild" AfterTargets="PostBuildEvent">
+		<!-- Rename main .dll to .gha -->
+		<Exec Command="Copy &quot;$(TargetPath)&quot; &quot;$(TargetDir)$(ProjectName).gha&quot;&#xD;&#xA;Erase &quot;$(TargetPath)&quot;" />		
+	</Target>
+</Project>

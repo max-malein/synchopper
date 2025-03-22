@@ -1,0 +1,8 @@
+{
+  "profiles": {
+    "Rhino 7": {
+      "commandName": "Executable",
+      "executablePath": "C:\\Program Files\\Rhino 7\\System\\Rhino.exe"
+    }
+  }
+}
