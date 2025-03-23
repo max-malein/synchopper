@@ -73,7 +73,7 @@ namespace synchopper
 
         private void AddReference_Click(object sender, System.EventArgs e)
         {
-            AddReference.ImportFile("X:\\Shared drives\\06 Tech Development\\D. Ostate\\C. Development\\Ostate\\GH\\upg-test.gh");
+            AddReference.Import();
         }
     }
 }
