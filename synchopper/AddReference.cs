@@ -49,7 +49,7 @@ namespace synchopper
                 }
 
                 // register undo here
-
+                
 
                 var groupName = _prefix + path;
                 GH_Group group;
@@ -68,6 +68,7 @@ namespace synchopper
                     };
 
                     newDoc.AddObject(group, false);
+                    //ghDoc.UndoUtil.RecordAddObjectEvent("AddGroupEvent", group);
                 }                    
 
                 // we don't need to import the objects from the group that references the current file
@@ -117,22 +118,36 @@ namespace synchopper
                         return;
                     }
 
-                    foreach (var obj in objectsToRemove)
+                    var existingObjects = objectsToRemove
+                        .Select(g => ghDoc.FindObject(g, false))
+                        .Where(o => o is not null)
+                        .ToList();
+
+                    //ghDoc.UndoUtil.RecordRemoveObjectEvent("Remove existing objects", existingObjects);
+
+                    foreach (var obj in existingObjects)
                     {
-                        var existingObject = ghDoc.FindObject(obj, false);
-                        if (existingObject is not null)
-                        {
-                            ghDoc.RemoveObject(existingObject, false);
-                        }
-                    }
+                        ghDoc.RemoveObject(obj, false);
+                    }                    
                 }
 
                 // remove objects in the current group if any.
                 // they will be replaced
-                foreach (var item in group.Objects())
+                var currentGroupObjects = group.Objects();
+                if (currentGroupObjects.Count > 0)
                 {
-                    ghDoc.RemoveObject(item, false);
+                    ghDoc.UndoUtil.RecordRemoveObjectEvent("Remove existing group objects", currentGroupObjects);
+
+                    foreach (var item in group.Objects())
+                    {
+                        ghDoc.RemoveObject(item, false);
+                    }
                 }
+                
+
+                ghDoc.UndoUtil.RecordAddObjectEvent("Import new objects", importObjects);
+
+                ghDoc.UndoUtil.MergeRecords(2);
 
                 foreach (var obj in importObjects)
                 {
