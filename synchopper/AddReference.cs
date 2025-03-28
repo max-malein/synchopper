@@ -2,6 +2,7 @@
 using Grasshopper.Kernel.Special;
 using Grasshopper.Kernel.Undo;
 using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
 using System.Linq;
@@ -48,15 +49,15 @@ namespace synchopper
                     return;
                 }
 
-                // register undo here
-                
+                var objectsToDelete = new List<IGH_DocumentObject>();
+                var objectsToAdd = new List<IGH_DocumentObject>();
 
                 var groupName = _prefix + path;
                 GH_Group group;
                 var existingGroup = ghDoc.Objects.FirstOrDefault(o => o.NickName == groupName) as GH_Group;
                 if (existingGroup is not null)
                 {
-                    existingGroup.ObjectIDs.Clear();
+                    objectsToDelete.AddRange(existingGroup.ObjectsRecursive());
                     group = existingGroup;
                 }
                 else
@@ -64,27 +65,28 @@ namespace synchopper
                     group = existingGroup ?? new GH_Group()
                     {
                         NickName = groupName,
-                        Colour = Color.Pink,
+                        Colour = Color.FromArgb(100, Color.Pink),
                     };
 
-                    newDoc.AddObject(group, false);
+                    objectsToAdd.Add(group);
                     //ghDoc.UndoUtil.RecordAddObjectEvent("AddGroupEvent", group);
-                }                    
+                }
 
-                // we don't need to import the objects from the group that references the current file
-                var currentFileReferenceGroupName = _prefix + ghDoc.FilePath;
-                var currentFileReferenceGroups = ghDoc.Objects
-                    .Where(o => o is GH_Group && o.NickName == currentFileReferenceGroupName)
+                // we don't need to import any referenced groups to avoid recursive import
+                var sycnhopperGroups = newDoc.Objects
+                    .Where(o => o is GH_Group && o.NickName.StartsWith(_prefix))
                     .Cast<GH_Group>()
-                    .ToList();
-
-                var skipObjects = currentFileReferenceGroups
-                    .SelectMany(g => g.Objects())
                     .ToHashSet();
 
-                currentFileReferenceGroups.ForEach(g => skipObjects.Add(g)); // also skip the group itself
+                var skipObjects = sycnhopperGroups
+                    .SelectMany(g => g.ObjectsRecursive())
+                    .ToHashSet();
 
-                var importObjects = newDoc.Objects.Where(o => !skipObjects.Contains(o)).ToList();
+                skipObjects.UnionWith(sycnhopperGroups); // also skip the groups itself 
+
+                var importObjects = newDoc.Objects
+                    .Except(skipObjects)
+                    .ToList();
 
                 if (importObjects.Count == 0)
                 {
@@ -92,25 +94,31 @@ namespace synchopper
                     return;
                 }
 
-                var existingObjectsInSyncGroups = ghDoc.Objects
+                objectsToAdd.AddRange(importObjects);
+
+                // find existing objects outside of the sync groups that will be replaced
+                var existingSyncGroups = ghDoc.Objects
                     .Where(o => o is GH_Group && o.NickName.StartsWith(_prefix))
                     .Cast<GH_Group>()
-                    .SelectMany(g => g.Objects())
-                    .Select(o => o.InstanceGuid)
+                    .ToHashSet();
+
+                var existingObjectsInSyncGroups = existingSyncGroups
+                    .SelectMany(g => g.ObjectsRecursive())
                     .ToHashSet();
 
                 var existingObjectsOutsideSyncGroups = ghDoc.Objects
-                    .Select(o => o.InstanceGuid)
                     .Except(existingObjectsInSyncGroups)
+                    .Except(existingSyncGroups)
                     .ToHashSet();
 
-                var objectsToRemove = existingObjectsOutsideSyncGroups
-                    .Intersect(importObjects.Select(o => o.InstanceGuid))
+                var existingObjectsToDelete = existingObjectsOutsideSyncGroups
+                    .Select(o => o.InstanceGuid).ToList()
+                    .Intersect(importObjects.Select(o => o.InstanceGuid).ToList())
                     .ToList();
 
-                if (objectsToRemove.Count > 0)
+                if (existingObjectsToDelete.Count > 0)
                 {
-                    var message = $"Synchopper: There are {objectsToRemove.Count} objects in the current file that will be replaced by the objects from the imported file.\n" +
+                    var message = $"Synchopper: There are {existingObjectsToDelete.Count} objects in the current file that will be replaced by the objects from the imported file.\n" +
                         $"Do you want to proceed?";
 
                     if (System.Windows.Forms.MessageBox.Show(message, "Synchopper", System.Windows.Forms.MessageBoxButtons.OKCancel) == System.Windows.Forms.DialogResult.Cancel)
@@ -118,41 +126,41 @@ namespace synchopper
                         return;
                     }
 
-                    var existingObjects = objectsToRemove
-                        .Select(g => ghDoc.FindObject(g, false))
-                        .Where(o => o is not null)
-                        .ToList();
-
-                    //ghDoc.UndoUtil.RecordRemoveObjectEvent("Remove existing objects", existingObjects);
-
-                    foreach (var obj in existingObjects)
+                    foreach (var existingObject in existingObjectsToDelete)
                     {
-                        ghDoc.RemoveObject(obj, false);
-                    }                    
+                        var exOb = ghDoc.Objects.FirstOrDefault(o => o.InstanceGuid == existingObject);
+                        exOb.NewInstanceGuid();
+                    }
+
+                    //objectsToDelete.AddRange(existingObjectsToDelete);
                 }
 
-                // remove objects in the current group if any.
-                // they will be replaced
-                var currentGroupObjects = group.Objects();
-                if (currentGroupObjects.Count > 0)
+
+                // remove objects from the current file
+                if (objectsToDelete.Count > 0)
                 {
-                    ghDoc.UndoUtil.RecordRemoveObjectEvent("Remove existing group objects", currentGroupObjects);
+                    ghDoc.UndoUtil.RecordRemoveObjectEvent("Remove existing group objects", objectsToDelete);
 
                     foreach (var item in group.Objects())
                     {
                         ghDoc.RemoveObject(item, false);
                     }
-                }
-                
+                }                
 
-                ghDoc.UndoUtil.RecordAddObjectEvent("Import new objects", importObjects);
+                ghDoc.UndoUtil.RecordAddObjectEvent("Import new objects", importObjects);                
 
-                ghDoc.UndoUtil.MergeRecords(2);
-
-                foreach (var obj in importObjects)
+                foreach (var obj in objectsToAdd)
                 {
                     ghDoc.AddObject(obj, false);
-                    group.AddObject(obj.InstanceGuid);
+                    if (obj != group)
+                    {
+                        group.AddObject(obj.InstanceGuid);
+                    }
+                }
+
+                if (objectsToDelete.Count > 0)
+                {
+                    ghDoc.UndoUtil.MergeRecords(2);
                 }
 
                 ghDoc.NewSolution(true);
