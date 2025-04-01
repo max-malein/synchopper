@@ -75,6 +75,10 @@ namespace synchopper
                 objectsToAdd.Add(group);
             }
 
+            // Important! Change all the instance guids of the objects in the reference document
+            // so that they don't conflict with the objects in the current document
+            referenceDoc.MutateAllIds();
+
             // we don't need to import any referenced groups to avoid recursive import
             var sycnhopperGroups = referenceDoc.Objects
                 .Where(o => o is GH_Group && o.NickName.StartsWith(_prefix))
@@ -98,7 +102,6 @@ namespace synchopper
             }
 
             objectsToAdd.AddRange(importObjects);
-            //CheckDuplicates(ghDoc, importObjects);
 
             int numberOfUndos = 0;
             // remove objects from the current file
@@ -107,103 +110,32 @@ namespace synchopper
                 ghDoc.UndoUtil.RecordRemoveObjectEvent("Remove existing group objects", objectsToDelete);
                 numberOfUndos++;
 
-                foreach (var item in objectsToDelete)
-                {
-                    ghDoc.RemoveObject(item, false);
-                }
-
-                ghDoc.DestroyObjectTable();
+                ghDoc.RemoveObjects(objectsToDelete, false);
             }
 
             ghDoc.UndoUtil.RecordAddObjectEvent("Import new objects", importObjects);
             numberOfUndos++;
 
-           
-            
-            referenceDoc.RemoveObjects(skipObjects, false);
-            var tempGroup = new GH_Group()
+            foreach (var obj in objectsToAdd)
             {
-                NickName = Guid.NewGuid().ToString()
-            };
+                ghDoc.AddObject(obj, false);
 
-            foreach (var item in referenceDoc.Objects)
-            {
-                tempGroup.AddObject(item.InstanceGuid);
+                if (obj != group)
+                {
+                    // add objects to the group
+                    group.AddObject(obj.InstanceGuid);
+                }
             }
-
-            referenceDoc.AddObject(tempGroup, false);
-            referenceDoc.MutateAllIds();
-
-            ghDoc.MergeDocument(referenceDoc);
-
-            //foreach (var obj in objectsToAdd)
-            //{
-            //    // if there is an existing object with the same id, we need to change id of the existing object
-            //    var existingObject = ghDoc.Objects.FirstOrDefault(o => o.InstanceGuid == obj.InstanceGuid);
-            //    if (existingObject != null)
-            //    {
-            //        // TODO: add undo action for this
-            //        existingObject?.NewInstanceGuid();
-            //        ghDoc.DestroyObjectTable();
-            //    }
-
-            //    ghDoc.AddObject(obj, false);
-            //    ghDoc.DestroyObjectTable();
-
-            //    if (obj != group)
-            //    {
-            //        group.AddObject(obj.InstanceGuid);                    
-            //    }
-            //}
-
-            //ghDoc.DestroyObjectTable(); // just in case
 
             // merge different types of undos
             if (numberOfUndos > 1)
             {
-                //ghDoc.UndoUtil.MergeRecords(numberOfUndos);
+                ghDoc.UndoUtil.MergeRecords(numberOfUndos);
             }
 
             ghDoc.NewSolution(true);
             Grasshopper.Instances.ActiveCanvas.Refresh();
 
-        }
-
-        private static bool CheckDuplicates(GH_Document ghDoc, List<IGH_DocumentObject> importObjects)
-        {
-            // find existing objects outside of the sync groups that will be replaced
-            var existingSyncGroups = ghDoc.Objects
-                .Where(o => o is GH_Group && o.NickName.StartsWith(_prefix))
-                .Cast<GH_Group>()
-                .ToHashSet();
-
-            var existingObjectsInSyncGroups = existingSyncGroups
-                .SelectMany(g => g.ObjectsRecursive())
-                .ToHashSet();
-
-            var existingObjectsOutsideSyncGroups = ghDoc.Objects
-                .Except(existingObjectsInSyncGroups)
-                .Except(existingSyncGroups)
-                .ToHashSet();
-
-            var existingObjectsChangeId = existingObjectsOutsideSyncGroups
-                .Select(o => o.InstanceGuid).ToList()
-                .Intersect(importObjects.Select(o => o.InstanceGuid).ToList())
-                .ToList();
-
-            if (existingObjectsChangeId.Count > 0)
-            {
-                var message = $"Synchopper: There are {existingObjectsChangeId.Count} components in the current file that share the same ID with the objects from the imported file. " +
-                    $"You don't need to do anything, the existing components will be given new IDs.\n\n" +
-                    $"Do you want to proceed?";
-
-                if (System.Windows.Forms.MessageBox.Show(message, "Synchopper", System.Windows.Forms.MessageBoxButtons.OKCancel) == System.Windows.Forms.DialogResult.Cancel)
-                {
-                    return false;
-                }
-            }
-
-            return true;
         }
     }
 }
