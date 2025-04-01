@@ -1,6 +1,5 @@
 ﻿using Grasshopper.Kernel;
 using Grasshopper.Kernel.Special;
-using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
@@ -9,11 +8,11 @@ using System.Windows.Forms;
 
 namespace synchopper
 {
-    internal class AddReference
+    public class AddReference
     {
         private readonly static string _prefix = "_synchopper: ";
 
-        internal static void Import()
+        public static void OpenImportFileDialog()
         {
             using var openFileDialog = new OpenFileDialog();
             openFileDialog.Filter = "Grasshopper Files (*.gh;*.ghx)|*.gh;*.ghx";
@@ -21,40 +20,66 @@ namespace synchopper
 
             if (openFileDialog.ShowDialog() == DialogResult.OK)
             {                
-                ImportFile(openFileDialog.FileName);
+                ImportFile(openFileDialog.FileName, true);
             }
         }
 
-        internal static void ImportFile(string path)
+        public static void UpdateAllReferences()
         {
-            if (!File.Exists(path))
+            GH_Document ghDoc = Grasshopper.Instances.ActiveCanvas.Document;
+            if (ghDoc is null)
             {
-                throw new Exception("File does not exist.");
-            }
-
-            var ghDoc = Grasshopper.Instances.ActiveCanvas.Document;
-
-            if (ghDoc == null)
-                return;
-
-            var io = new GH_DocumentIO();
-
-            if (!io.Open(path))
-            {
-                Rhino.RhinoApp.WriteLine("Synchopper: Failed to open file.");
+                Rhino.RhinoApp.WriteLine("Synchopper: No active document.");
                 return;
             }
 
-            var referenceDoc = io.Document;
+            var groups = ghDoc.Objects
+                .Where(o => o is GH_Group && o.NickName.StartsWith(_prefix))
+                .Cast<GH_Group>()
+                .ToList();
 
+            if (groups.Count == 0)
+            {
+                Rhino.RhinoApp.WriteLine("Synchopper: No references to update.");
+                return;
+            }
+
+            int successCount = 0;
+            foreach (var group in groups)
+            {
+                var filePath = group.NickName.Substring(_prefix.Length);
+                bool importResult = ImportFile(filePath, false);
+                if (importResult)
+                {
+                    successCount++;
+                }
+            }
+
+            ghDoc.NewSolution(true);
+            Grasshopper.Instances.ActiveCanvas.Refresh();
+
+            Rhino.RhinoApp.WriteLine($"Synchopper: Updated {successCount}/{groups.Count} references.");
+        }
+
+        internal static bool ImportFile(string path, bool recompute)
+        {            
+            var referenceDoc = ReadGhFile(path);
             if (referenceDoc is null)
             {
-                Rhino.RhinoApp.WriteLine("Synchopper: Failed to read the file.");
-                return;
+                return false;
+            }
+
+            GH_Document ghDoc = Grasshopper.Instances.ActiveCanvas.Document;
+            if (ghDoc is null)
+            {
+                Rhino.RhinoApp.WriteLine("Synchopper: No active document.");
+                return false;
             }
 
             var objectsToDelete = new List<IGH_DocumentObject>();
             var objectsToAdd = new List<IGH_DocumentObject>();
+
+            string undoMessage = "Add reference group";
 
             var groupName = _prefix + path;
             GH_Group group;
@@ -63,6 +88,7 @@ namespace synchopper
             {
                 objectsToDelete.AddRange(existingGroup.ObjectsRecursive());
                 group = existingGroup;
+                undoMessage = "Update reference group";
             }
             else
             {
@@ -98,7 +124,7 @@ namespace synchopper
             if (importObjects.Count == 0)
             {
                 Rhino.RhinoApp.WriteLine("Synchopper: No objects to import.");
-                return;
+                return false;
             }
 
             objectsToAdd.AddRange(importObjects);
@@ -107,13 +133,13 @@ namespace synchopper
             // remove objects from the current file
             if (objectsToDelete.Count > 0)
             {
-                ghDoc.UndoUtil.RecordRemoveObjectEvent("Remove existing group objects", objectsToDelete);
+                ghDoc.UndoUtil.RecordRemoveObjectEvent(undoMessage, objectsToDelete);
                 numberOfUndos++;
 
                 ghDoc.RemoveObjects(objectsToDelete, false);
             }
 
-            ghDoc.UndoUtil.RecordAddObjectEvent("Import new objects", importObjects);
+            ghDoc.UndoUtil.RecordAddObjectEvent(undoMessage, importObjects);
             numberOfUndos++;
 
             foreach (var obj in objectsToAdd)
@@ -133,9 +159,40 @@ namespace synchopper
                 ghDoc.UndoUtil.MergeRecords(numberOfUndos);
             }
 
-            ghDoc.NewSolution(true);
-            Grasshopper.Instances.ActiveCanvas.Refresh();
+            if (recompute)
+            {
+                ghDoc.NewSolution(true);
+                Grasshopper.Instances.ActiveCanvas.Refresh();
+            }
 
+            return true;
         }
+
+        private static GH_Document? ReadGhFile(string path)
+        {
+            if (!File.Exists(path))
+            {
+                Rhino.RhinoApp.WriteLine("Synchopper: File does not exist.");
+                return null;
+            }
+
+            var io = new GH_DocumentIO();
+
+            if (!io.Open(path))
+            {
+                Rhino.RhinoApp.WriteLine("Synchopper: Failed to open file.");
+                return null;
+            }
+
+            var referenceDoc = io.Document;
+            if (referenceDoc is null)
+            {
+                Rhino.RhinoApp.WriteLine("Synchopper: Failed to read the file.");
+            }
+
+            return referenceDoc;
+        }
+
+        
     }
 }

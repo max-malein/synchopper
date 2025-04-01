@@ -68,12 +68,12 @@ namespace synchopper
 
         private void UpdateAll_Click(object sender, System.EventArgs e)
         {
-            throw new System.NotImplementedException();
+            AddReference.UpdateAllReferences();
         }
 
         private void AddReference_Click(object sender, System.EventArgs e)
         {
-            AddReference.Import();
+            AddReference.OpenImportFileDialog();
         }
     }
 }
