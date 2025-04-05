@@ -1,5 +1,6 @@
 ﻿using Grasshopper.Kernel;
 using Grasshopper.Kernel.Special;
+using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
@@ -22,6 +23,106 @@ namespace synchopper
             {                
                 ImportFile(openFileDialog.FileName, true);
             }
+        }
+
+        public static void SaveSelectionAsReference()
+        {
+            using var saveFileDialog = new SaveFileDialog();
+            saveFileDialog.Filter = "Grasshopper Files (*.gh;*.ghx)|*.gh;*.ghx";
+            saveFileDialog.Title = "Save Selection as Reference";
+
+            if (saveFileDialog.ShowDialog() != DialogResult.OK)
+            {
+                return;
+            }
+
+            GH_Document ghDoc = Grasshopper.Instances.ActiveCanvas.Document;
+            if (ghDoc is null)
+            {
+                Rhino.RhinoApp.WriteLine("Synchopper: No active document.");
+                return;
+            }
+
+            var selectedObjects = ghDoc.SelectedObjects();
+            if (selectedObjects.Count == 0)
+            {
+                Rhino.RhinoApp.WriteLine("Synchopper: No objects selected.");
+                return;
+            }
+
+            var copyDoc = GH_Document.DuplicateDocument(ghDoc);
+
+            if (copyDoc == null)
+            {
+                Rhino.RhinoApp.WriteLine("Synchopper: Hmm... something went wrong when I tried to copy the existing file.");
+                return;
+            }
+
+            var selectedObjectsGuids = selectedObjects
+                .Select(o => o.InstanceGuid)
+                .ToHashSet();
+
+            // we need to use only components that are not already in a sync group
+            var referenceGroups = copyDoc.Objects
+                .Where(o => o is GH_Group && o.NickName.StartsWith(_prefix))
+                .Cast<GH_Group>();
+
+            var objectsInGroups = referenceGroups
+                .SelectMany(g => g.ObjectsRecursive())
+                .ToHashSet();
+
+            var objectsNotInGroups = copyDoc.Objects
+                .Except(objectsInGroups)
+                .Except(referenceGroups)
+                .Select(o => o.InstanceGuid)
+                .ToHashSet();
+
+            if (objectsNotInGroups.Count == 0)
+            {
+                Rhino.RhinoApp.WriteLine("Synchopper: This file can't be saved as reference because it doesn't contain any components that are not referenced already.");
+                return;
+            }
+
+            var backReferencedObjectIds = objectsNotInGroups
+                .Except(selectedObjectsGuids)
+                .ToList();
+
+            if (backReferencedObjectIds.Count > 0)
+            {
+                GH_Group backReferenceGroup = CreateReferenceGroup(ghDoc.FilePath, backReferencedObjectIds);
+                copyDoc.AddObject(backReferenceGroup, false);
+            }
+
+            // save the copy to a new file
+            var io = new GH_DocumentIO(copyDoc);
+            var saveResult = io.SaveQuiet(saveFileDialog.FileName);
+
+            if (!saveResult)
+            {
+                Rhino.RhinoApp.WriteLine("Synchopper: Failed to save the file.");
+                return;
+            }
+
+            var group = CreateReferenceGroup(saveFileDialog.FileName, selectedObjectsGuids);
+            ghDoc.AddObject(group, false);
+
+            Grasshopper.Instances.ActiveCanvas.Refresh();
+        }
+
+        private static GH_Group CreateReferenceGroup(string filePath, IEnumerable<Guid> componentGuids)
+        {
+            var referenceGroup = new GH_Group()
+            {
+                NickName = _prefix + filePath,
+                Colour = Color.FromArgb(100, Color.Pink),
+            };
+
+            foreach (var guid in componentGuids)
+            {
+                referenceGroup.AddObject(guid);
+            }
+
+            return referenceGroup;
         }
 
         public static void UpdateAllReferences()
@@ -192,7 +293,5 @@ namespace synchopper
 
             return referenceDoc;
         }
-
-        
     }
 }

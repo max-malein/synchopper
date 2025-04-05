@@ -1,5 +1,6 @@
 ﻿using Grasshopper.GUI;
 using Grasshopper.Kernel;
+using System;
 using System.Windows.Forms;
 
 namespace synchopper
@@ -53,6 +54,16 @@ namespace synchopper
             addReference.Click += AddReference_Click;
             synchopperTab.DropDownItems.Add(addReference);
 
+
+            var saveSelection = new ToolStripMenuItem
+            {
+                Text = "Save selection as a reference...",
+                ToolTipText = "Save selected components as a separate file and add it as a reference.",
+            };
+
+            saveSelection.Click += saveSelectionClick;
+            synchopperTab.DropDownItems.Add(saveSelection);
+
             var updateAll = new ToolStripMenuItem
             {
                 Text = "Update all",
@@ -64,6 +75,11 @@ namespace synchopper
 
             docEditor.MainMenuStrip.ResumeLayout(false);
             docEditor.MainMenuStrip.PerformLayout();
+        }
+
+        private void saveSelectionClick(object sender, EventArgs e)
+        {
+            AddReference.SaveSelectionAsReference();
         }
 
         private void UpdateAll_Click(object sender, System.EventArgs e)
