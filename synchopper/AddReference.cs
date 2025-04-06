@@ -11,7 +11,7 @@ namespace synchopper
 {
     public class AddReference
     {
-        private readonly static string _prefix = "_synchopper: ";
+        private readonly static string _prefix = "_xref: ";
 
         public static void OpenImportFileDialog()
         {
@@ -20,8 +20,9 @@ namespace synchopper
             openFileDialog.Title = "Select a Grasshopper File";
 
             if (openFileDialog.ShowDialog() == DialogResult.OK)
-            {                
-                ImportFile(openFileDialog.FileName, true);
+            {
+                GH_Document ghDoc = Grasshopper.Instances.ActiveCanvas.Document;
+                ImportFile(ghDoc, openFileDialog.FileName, true);
             }
         }
 
@@ -49,8 +50,9 @@ namespace synchopper
                 Rhino.RhinoApp.WriteLine("Synchopper: No objects selected.");
                 return;
             }
-
+            
             var copyDoc = GH_Document.DuplicateDocument(ghDoc);
+            copyDoc.DeselectAll();
 
             if (copyDoc == null)
             {
@@ -83,46 +85,75 @@ namespace synchopper
                 return;
             }
 
-            var backReferencedObjectIds = objectsNotInGroups
-                .Except(selectedObjectsGuids)
+            var selectedObjectsNotInGroupsIds = objectsNotInGroups
+                .Intersect(selectedObjectsGuids)
                 .ToList();
 
-            if (backReferencedObjectIds.Count > 0)
+            if (selectedObjectsNotInGroupsIds.Count == 0)
             {
-                GH_Group backReferenceGroup = CreateReferenceGroup(ghDoc.FilePath, backReferencedObjectIds);
-                copyDoc.AddObject(backReferenceGroup, false);
+                Rhino.RhinoApp.WriteLine("Synchopper: No objects selected that are not already referenced.");
+                return;
             }
 
-            // save the copy to a new file
-            var io = new GH_DocumentIO(copyDoc);
+            var selectedObjectsNotInGroups = selectedObjectsNotInGroupsIds
+            .Select(id => ghDoc.FindObject(id, false))
+            .ToList();
+
+            // remove selected objects from the current document
+            ghDoc.UndoUtil.RecordRemoveObjectEvent("Remove selected objects", selectedObjects);
+            foreach (var obj in selectedObjects)
+            {
+                ghDoc.RemoveObject(obj, false);
+            }
+
+            // save the current file
+            var io = new GH_DocumentIO(ghDoc);
+            io.Save();
+
+            // remove not selected objects from the reference document
+            var notSelectedObjectsNotInGroups = objectsNotInGroups
+                .Except(selectedObjectsNotInGroupsIds)
+                .Select(id => copyDoc.FindObject(id, false))
+                .ToList();
+
+
+            copyDoc.RemoveObjects(notSelectedObjectsNotInGroups, false);
+
+            // Mutate ids in the reference doc
+            copyDoc.DestroyProxySources();
+            copyDoc.MutateAllIds();
+
+            // import current document into the copy document
+            ImportDoc(copyDoc, ghDoc, false);
+
+            // save the copy document
+            io = new GH_DocumentIO(copyDoc);
             var saveResult = io.SaveQuiet(saveFileDialog.FileName);
 
             if (!saveResult)
             {
-                Rhino.RhinoApp.WriteLine("Synchopper: Failed to save the file.");
+                Rhino.RhinoApp.WriteLine("Synchopper: Failed to save reference.");
+                
+                // undo the changes to the current document
+                ghDoc.Undo();
                 return;
             }
 
-            var group = CreateReferenceGroup(saveFileDialog.FileName, selectedObjectsGuids);
-            ghDoc.AddObject(group, false);
+            // we need to assign the name for correct import
+            copyDoc.FilePath = saveFileDialog.FileName;
 
-            Grasshopper.Instances.ActiveCanvas.Refresh();
-        }
-
-        private static GH_Group CreateReferenceGroup(string filePath, IEnumerable<Guid> componentGuids)
-        {
-            var referenceGroup = new GH_Group()
+            // import the reference document into the current document
+            var importResult = ImportDoc(ghDoc, copyDoc, true);
+            if (!importResult)
             {
-                NickName = _prefix + filePath,
-                Colour = Color.FromArgb(100, Color.Pink),
-            };
+                Rhino.RhinoApp.WriteLine("Synchopper: Failed to import the reference document.");
 
-            foreach (var guid in componentGuids)
-            {
-                referenceGroup.AddObject(guid);
+                // undo the changes to the current document
+                ghDoc.Undo();
+                return;
             }
 
-            return referenceGroup;
+            Grasshopper.Instances.ActiveCanvas.Refresh();
         }
 
         public static void UpdateAllReferences()
@@ -149,7 +180,7 @@ namespace synchopper
             foreach (var group in groups)
             {
                 var filePath = group.NickName.Substring(_prefix.Length);
-                bool importResult = ImportFile(filePath, false);
+                bool importResult = ImportFile(ghDoc, filePath, false);
                 if (importResult)
                 {
                     successCount++;
@@ -162,27 +193,54 @@ namespace synchopper
             Rhino.RhinoApp.WriteLine($"Synchopper: Updated {successCount}/{groups.Count} references.");
         }
 
-        internal static bool ImportFile(string path, bool recompute)
-        {            
+        internal static bool ImportFile(GH_Document ghDoc, string path, bool recompute)
+        {
             var referenceDoc = ReadGhFile(path);
             if (referenceDoc is null)
             {
+                Rhino.RhinoApp.WriteLine("Synchopper: Failed to read the file.");
                 return false;
             }
 
-            GH_Document ghDoc = Grasshopper.Instances.ActiveCanvas.Document;
+            return ImportDoc(ghDoc, referenceDoc, recompute);
+        }
+
+        internal static bool ImportDoc(GH_Document ghDoc, GH_Document referenceDoc, bool recompute)
+        {
             if (ghDoc is null)
             {
                 Rhino.RhinoApp.WriteLine("Synchopper: No active document.");
                 return false;
             }
 
+            if (referenceDoc is null)
+            {
+                Rhino.RhinoApp.WriteLine("Synchopper: No reference document.");
+                return false;
+            }
+
+            // after coping the FilePath property will become null
+            var filePath = referenceDoc.FilePath;
+
+            // make a copy of the reference document before mutating the guids
+            referenceDoc = GH_Document.DuplicateDocument(referenceDoc);
+
+            if (referenceDoc is null)
+            {
+                Rhino.RhinoApp.WriteLine("Synchopper: Hmm... something went wrong when I tried to copy the reference file.");
+                return false;
+            }
+
+            // Important! Change all the instance guids of the objects in the reference document
+            // so that they don't conflict with the objects in the current document
+            referenceDoc.MutateAllIds();
+
             var objectsToDelete = new List<IGH_DocumentObject>();
             var objectsToAdd = new List<IGH_DocumentObject>();
 
             string undoMessage = "Add reference group";
 
-            var groupName = _prefix + path;
+            var groupName = _prefix + filePath;
             GH_Group group;
             var existingGroup = ghDoc.Objects.FirstOrDefault(o => o.NickName == groupName) as GH_Group;
             if (existingGroup is not null)
@@ -193,7 +251,7 @@ namespace synchopper
             }
             else
             {
-                group = existingGroup ?? new GH_Group()
+                group = new GH_Group()
                 {
                     NickName = groupName,
                     Colour = Color.FromArgb(100, Color.Pink),
@@ -201,10 +259,6 @@ namespace synchopper
 
                 objectsToAdd.Add(group);
             }
-
-            // Important! Change all the instance guids of the objects in the reference document
-            // so that they don't conflict with the objects in the current document
-            referenceDoc.MutateAllIds();
 
             // we don't need to import any referenced groups to avoid recursive import
             var sycnhopperGroups = referenceDoc.Objects
@@ -231,6 +285,7 @@ namespace synchopper
             objectsToAdd.AddRange(importObjects);
 
             int numberOfUndos = 0;
+
             // remove objects from the current file
             if (objectsToDelete.Count > 0)
             {
@@ -240,7 +295,8 @@ namespace synchopper
                 ghDoc.RemoveObjects(objectsToDelete, false);
             }
 
-            ghDoc.UndoUtil.RecordAddObjectEvent(undoMessage, importObjects);
+            // add objects to the current file
+            ghDoc.UndoUtil.RecordAddObjectEvent(undoMessage, objectsToAdd);
             numberOfUndos++;
 
             foreach (var obj in objectsToAdd)
@@ -253,6 +309,12 @@ namespace synchopper
                     group.AddObject(obj.InstanceGuid);
                 }
             }
+
+            // if any of the components were previously connected to parameters that do not exist in the new file,
+            // it will create a "ghost" wire that is not connected to anything.
+            // We need to remove those non-existent parameters.
+            var importedGuids = objectsToAdd.Select(o => o.InstanceGuid);
+            RemoveGhostParams(ghDoc, importedGuids);
 
             // merge different types of undos
             if (numberOfUndos > 1)
@@ -267,6 +329,62 @@ namespace synchopper
             }
 
             return true;
+        }
+
+        private static void RemoveGhostParams(GH_Document ghDoc, IEnumerable<Guid> importedGuids)
+        {
+            foreach (var guid in importedGuids)
+            {
+                var importedObject = ghDoc.FindObject(guid, false);
+
+                if (importedObject is IGH_Param param)
+                {
+                    DisconnectRedundantWires(param, ghDoc);
+                }
+                else if (importedObject is IGH_Component component)
+                {
+                    var allParams = component.Params.Input.ToList();
+                    allParams.AddRange(component.Params.Output);
+                    foreach (var par in allParams)
+                    {
+                        DisconnectRedundantWires(par, ghDoc);
+                    }
+                }
+            }
+        }
+
+        private static void DisconnectRedundantWires(IGH_Param param, GH_Document ghDoc)
+        {
+            bool changed = false;
+
+            for(int i = param.SourceCount - 1; i >= 0; i--)
+            {
+                var source = param.Sources[i];
+                var parentId = source.Attributes.GetTopLevel?.InstanceGuid;
+                if (parentId == null || ghDoc.FindObject(parentId.Value, false) == null)
+                {
+                    // remove
+                    param.RemoveSource(source);
+                    changed = true;
+                }
+            }
+
+            for (int i = param.Recipients.Count - 1; i >= 0; i--)
+            {
+                var recipient = param.Recipients[i];
+                var parentId = recipient.Attributes.GetTopLevel?.InstanceGuid;
+                if (parentId == null || ghDoc.FindObject(parentId.Value, false) == null)
+                {
+                    // remove
+                    param.Recipients.Remove(recipient);
+                    changed = true;
+                }
+            }
+
+            if (changed)
+            {
+                param.OnAttributesChanged(); // not sure if it's needed
+            }
         }
 
         private static GH_Document? ReadGhFile(string path)
