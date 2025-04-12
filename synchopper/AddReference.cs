@@ -100,7 +100,7 @@ namespace synchopper
             .ToList();
 
             // remove selected objects from the current document
-            ghDoc.UndoUtil.RecordRemoveObjectEvent("Remove selected objects", selectedObjects);
+            ghDoc.UndoUtil.RecordRemoveObjectEvent("Save as reference", selectedObjects);
             foreach (var obj in selectedObjects)
             {
                 ghDoc.RemoveObject(obj, false);
@@ -152,6 +152,8 @@ namespace synchopper
                 ghDoc.Undo();
                 return;
             }
+
+            ghDoc.UndoUtil.MergeRecords(2);
 
             Grasshopper.Instances.ActiveCanvas.Refresh();
         }
