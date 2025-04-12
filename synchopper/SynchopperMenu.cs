@@ -79,17 +79,17 @@ namespace synchopper
 
         private void saveSelectionClick(object sender, EventArgs e)
         {
-            AddReference.SaveSelectionAsReference();
+            SyncEngine.SaveSelectionAsReference();
         }
 
         private void UpdateAll_Click(object sender, System.EventArgs e)
         {
-            AddReference.UpdateAllReferences();
+            SyncEngine.UpdateAllReferences();
         }
 
         private void AddReference_Click(object sender, System.EventArgs e)
         {
-            AddReference.OpenImportFileDialog();
+            SyncEngine.OpenImportFileDialog();
         }
     }
 }

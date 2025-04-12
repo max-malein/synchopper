@@ -9,7 +9,7 @@ using System.Windows.Forms;
 
 namespace synchopper
 {
-    public class AddReference
+    public class SyncEngine
     {
         private readonly static string _prefix = "_xref: ";
 
